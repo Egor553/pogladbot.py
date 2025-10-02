@@ -5,9 +5,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from datetime import datetime, timedelta
 import logging
+from zoneinfo import ZoneInfo
 
 # Настройка цикла событий для Windows
 if platform.system() == "Windows":
@@ -65,9 +66,6 @@ async def start_handler(message: types.Message):
     welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
     await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
     value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
-    # Место для динамического видео (пришлите file_id видео, если требуется)
-    # await message.answer_video(video='start_video_id', caption=value_text)
-    
     await message.answer(value_text, reply_markup=get_start_menu())
 
 # Callback handler
@@ -94,7 +92,7 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.answer("Введите новый адрес:")
         elif data == "change_time":
             await state.set_state(OrderStates.entering_time)
-            await callback.message.answer("Введите новое время (например: 29.09 18:00):")
+            await callback.message.answer("Укажите удобное время: Например: 02.10.25 18:00")
         elif data == "change_phone":
             await state.set_state(OrderStates.entering_phone)
             await callback.message.answer("Введите ваш номер телефона:")
@@ -142,13 +140,12 @@ async def handle_select_items(message: types.Message, state: FSMContext):
 @dp.message(OrderStates.entering_address)
 async def handle_address(message: types.Message, state: FSMContext):
     await state.update_data(address=message.text)
-    await message.answer("Укажите удобное время: Например: 29.09 18:00")
+    await message.answer("Укажите удобное время: Например: 02.10.25 18:00")
     await state.set_state(OrderStates.entering_time)
 
 # Время
 @dp.message(OrderStates.entering_time)
 async def handle_time(message: types.Message, state: FSMContext):
-    from zoneinfo import ZoneInfo
     chlyabinsk_tz = ZoneInfo("Asia/Yekaterinburg")  # Челябинск, UTC+5
     now_local = datetime.now(chlyabinsk_tz)  # Инициализация вне try
     
@@ -168,12 +165,11 @@ async def handle_time(message: types.Message, state: FSMContext):
     except ValueError as e:
         error_msg = str(e) if str(e) else "Неверный формат времени. Используйте формат: дд.мм.гг чч:мм (например, 02.10.25 18:00). Убедитесь, что между датой и временем есть пробел."
         # Создание клавиатуры с быстрыми кнопками
-        from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
         quick_times = [
             [KeyboardButton(text=f"{now_local.strftime('%d.%m.%y %H:%M')} (сейчас)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=1)).strftime('%d.%m.%y %H:%00')} (+1 час)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=2)).strftime('%d.%m.%y %H:%00')} (+2 часа)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=3)).strftime('%d.%m.%y %H:%00')} (+3 часа)")],
+            [KeyboardButton(text=f"{(now_local + timedelta(hours=1)).strftime('%d.%m.%y %H:%M')} (+1 час)")],
+            [KeyboardButton(text=f"{(now_local + timedelta(hours=2)).strftime('%d.%m.%y %H:%M')} (+2 часа)")],
+            [KeyboardButton(text=f"{(now_local + timedelta(hours=3)).strftime('%d.%m.%y %H:%M')} (+3 часа)")],
         ]
         keyboard = ReplyKeyboardMarkup(keyboard=quick_times, resize_keyboard=True, one_time_keyboard=True)
         await message.answer(error_msg + " Попробуйте снова или выберите время ниже:", reply_markup=keyboard)
@@ -269,7 +265,7 @@ async def handle_examples_reviews(message: types.Message):
     top_review = "Анастасия, мама двоих — ★★★★★ С двумя детьми и работой времени на глажку не оставалось совсем. Одежда копилась неделями, я уже смирилась, что будем ходить помятыми. Заказала ПогладьБот — и на следующий день всё вернули аккуратное, сложенное, будто новое. Чувствую себя человеком, а не вечной прачкой."
     await message.answer_photo(photo='AgACAgIAAxkBAAIEDWjdZ7xFZQfMjyEXmqD2UIKlWzO5AALq_jEbkOvpSqrckIaGN9YvAQADAgADeQADNgQ', caption=top_review)
     
-    # Остальные отзывы с распределенными фотографиями (рационально поделены: по одной на группу отзывов)
+    # Остальные отзывы с распределенными фотографиями
     reviews_group1 = """Отзывы 1-5:
 1. Марина, 34 — ★★★★★ Сервис выручает каждую неделю. Всё чётко. Крайне рекомендую.
 2. Андрей, 29 — ★★★★★ Рубашки идеальные, приехали. Мне нравится.
@@ -334,11 +330,11 @@ async def handle_support(message: types.Message):
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий (альтернативный подход)
+# Хэндлер для обработки фотографий
 @dp.message()
 async def handle_photo(message: types.Message):
-    if message.photo:  # Проверяем, есть ли фото в сообщении
-        photo = message.photo[-1]  # Берем фото с наивысшим разрешением
+    if message.photo:
+        photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
 
@@ -364,6 +360,7 @@ async def main():
     except (asyncio.CancelledError, KeyboardInterrupt):
         # Остановка бота при прерывании
         logging.info("Получен запрос на остановку бота. Выполняется graceful shutdown...")
+        await asyncio.sleep(5)  # Задержка для избежания flood control
         await bot.close()
         if not inactive_task.done():
             inactive_task.cancel()
@@ -375,6 +372,7 @@ async def main():
         logging.error(f"Ошибка при запуске поллинга: {e}")
         raise SystemExit("Не удалось запустить бота. Проверьте токен и соединение.")
     finally:
+        await asyncio.sleep(5)  # Дополнительная задержка перед окончательным закрытием
         await bot.close()
         logging.info("Бот остановлен.")
 
