@@ -5,10 +5,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from datetime import datetime, timedelta
 import logging
-from zoneinfo import ZoneInfo
 
 # Настройка цикла событий для Windows
 if platform.system() == "Windows":
@@ -18,7 +17,7 @@ if platform.system() == "Windows":
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = '8431173012:AAGLU7aN9DlIfIHt7E7ZAgjMg7ZUDp6rY0c'
+TOKEN = '8431173012:AAHAXemmpqtsSygY08xYKg__8pkh2ka3ZnQ'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
@@ -26,6 +25,7 @@ class OrderStates(StatesGroup):
     selecting_tariff = State()
     entering_address = State()
     entering_time = State()
+    entering_date = State()
     entering_phone = State()
     confirming_order = State()
     selecting_payment_method = State()
@@ -63,10 +63,21 @@ async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
-    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
-    await message.answer(value_text, reply_markup=get_start_menu())
+    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
+
+Что умеет бот:
+* Экономит до 5 часов в неделю на глажке 💘
+* Курьер бесплатно забирает и доставляет вещи 🚚
+* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
+* Абонементы и акции для постоянных клиентов 🎁
+* Интеграция с AmoCRM для трекинга заказов 📊
+* 24 часа на обработку — быстро и надежно ⏱️"""
+    
+    # Вставка видео (замени 'YOUR_VIDEO_FILE_ID' на file_id видео после загрузки и редактирования)
+    # Чтобы убрать водяной знак и добавить "Погладь": используй CapCut (импорт видео → текст "Погладь" центр → удалить объект для знака → экспорт). Получи file_id, отправив видео боту.
+    await message.answer_video(video='YOUR_VIDEO_FILE_ID', caption=welcome_text)
+    
+    await message.answer(welcome_text, reply_markup=get_start_menu())
 
 # Callback handler
 @dp.callback_query()
@@ -92,7 +103,10 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.answer("Введите новый адрес:")
         elif data == "change_time":
             await state.set_state(OrderStates.entering_time)
-            await callback.message.answer("Укажите удобное время: Например: 02.10.25 18:00")
+            await callback.message.answer("Введите новое время (чч:мм):")
+        elif data == "change_date":
+            await state.set_state(OrderStates.entering_date)
+            await callback.message.answer("Введите новую дату (дд.мм.гг):")
         elif data == "change_phone":
             await state.set_state(OrderStates.entering_phone)
             await callback.message.answer("Введите ваш номер телефона:")
@@ -140,42 +154,32 @@ async def handle_select_items(message: types.Message, state: FSMContext):
 @dp.message(OrderStates.entering_address)
 async def handle_address(message: types.Message, state: FSMContext):
     await state.update_data(address=message.text)
-    await message.answer("Укажите удобное время: Например: 02.10.25 18:00")
+    await message.answer("Укажите удобное время (чч:мм):")
     await state.set_state(OrderStates.entering_time)
 
 # Время
 @dp.message(OrderStates.entering_time)
 async def handle_time(message: types.Message, state: FSMContext):
-    chlyabinsk_tz = ZoneInfo("Asia/Yekaterinburg")  # Челябинск, UTC+5
-    now_local = datetime.now(chlyabinsk_tz)  # Инициализация вне try
-    
     try:
-        # Попытка парсинга времени в формате "дд.мм.гг чч:мм"
-        time_str = message.text.strip()
-        dt = datetime.strptime(time_str, "%d.%m.%y %H:%M")
-        dt_local = dt.replace(tzinfo=chlyabinsk_tz)
-        
-        # Проверка, не находится ли время в прошлом
-        if dt_local < now_local:
-            raise ValueError("Указанное время находится в прошлом. Пожалуйста, выберите будущее время.")
-        
-        await state.update_data(time=time_str)
+        time_str = message.text.strip().replace(' ', '')  # Удаляем лишние пробелы
+        dt_time = datetime.strptime(time_str, "%H:%M")
+        await state.update_data(time=dt_time.strftime("%H:%M"))  # Нормализуем
+        await message.answer("Укажите дату (дд.мм.гг):")
+        await state.set_state(OrderStates.entering_date)
+    except ValueError:
+        await message.answer("Неверный формат времени. Используйте чч:мм (например, 18:00). Попробуйте снова.")
+
+# Дата
+@dp.message(OrderStates.entering_date)
+async def handle_date(message: types.Message, state: FSMContext):
+    try:
+        date_str = message.text.strip().replace(' ', '')
+        dt_date = datetime.strptime(date_str, "%d.%m.%y")
+        await state.update_data(date=dt_date.strftime("%d.%m.%y"))  # Нормализуем
         await message.answer("Введите ваш номер телефона:", reply_markup=ReplyKeyboardRemove())
         await state.set_state(OrderStates.entering_phone)
-    except ValueError as e:
-        error_msg = str(e) if str(e) else "Неверный формат времени. Используйте формат: дд.мм.гг чч:мм (например, 02.10.25 18:00). Убедитесь, что между датой и временем есть пробел."
-        # Создание клавиатуры с быстрыми кнопками
-        quick_times = [
-            [KeyboardButton(text=f"{now_local.strftime('%d.%m.%y %H:%M')} (сейчас)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=1)).strftime('%d.%m.%y %H:%M')} (+1 час)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=2)).strftime('%d.%m.%y %H:%M')} (+2 часа)")],
-            [KeyboardButton(text=f"{(now_local + timedelta(hours=3)).strftime('%d.%m.%y %H:%M')} (+3 часа)")],
-        ]
-        keyboard = ReplyKeyboardMarkup(keyboard=quick_times, resize_keyboard=True, one_time_keyboard=True)
-        await message.answer(error_msg + " Попробуйте снова или выберите время ниже:", reply_markup=keyboard)
-    except Exception as e:
-        logging.error(f"Ошибка при обработке времени: {e}")
-        await message.answer("Произошла ошибка при обработке времени. Пожалуйста, попробуйте снова в формате дд.мм.гг чч:мм (например, 02.10.25 18:00).")
+    except ValueError:
+        await message.answer("Неверный формат даты. Используйте дд.мм.гг (например, 02.10.25). Попробуйте снова.")
 
 # Номер телефона
 @dp.message(OrderStates.entering_phone)
@@ -189,6 +193,7 @@ async def show_confirmation(message: types.Message, state: FSMContext):
     tariff = f"{data.get('quantity', 0)} вещей по тарифу (см. выше)"
     address = data.get('address', 'Не указан')
     time = data.get('time', 'Не указано')
+    date = data.get('date', 'Не указано')
     phone = data.get('phone', 'Не указан')
     quantity = data.get('quantity', 0)
     first_order = users.get(message.from_user.id, {}).get('first_order', True)
@@ -203,6 +208,7 @@ async def show_confirmation(message: types.Message, state: FSMContext):
 * Тариф: {tariff}
 * Адрес: {address}
 * Время: {time}
+* Дата: {date}
 * Номер телефона: {phone}
 * Предварительная цена: {int(price)} ₽"""
     
@@ -210,6 +216,7 @@ async def show_confirmation(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="Подтвердить", callback_data="confirm_order")],
         [InlineKeyboardButton(text="Изменить адрес", callback_data="change_address")],
         [InlineKeyboardButton(text="Изменить время", callback_data="change_time")],
+        [InlineKeyboardButton(text="Изменить дату", callback_data="change_date")],
         [InlineKeyboardButton(text="Изменить номер", callback_data="change_phone")],
         [InlineKeyboardButton(text="Назад к тарифам", callback_data="back_to_tariffs")],
     ])
@@ -247,10 +254,11 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-* Вы делаете заказ — прямо в боте.
-* Курьер бесплатно приезжает — забирает вещи, которые вы заранее собрали в пакет в удобное время.
-* Мы гладим профессионально — аккуратно, бережно, быстро.
-* Курьер доставляет обратно — чистые и выглаженные вещи возвращаются к вам. Таким образом, единственная Ваша задача — оформить заказ в боте и собрать вещи в пакет 😊"""
+1. Убрать стартовую картинку (что умеет бот на главный экран вставить видео, которое я тебе скинул, убери водяной знак и добавить надпись погладь).
+2. На главной экран вставь видео, которое я тебе скинул (убери водяной знак и добавь надпись 'Погладь').
+3. Исправить косяк со временем.
+4. Где этапы добавить картину успешных работ отзывы, выдавая по 3 офера в конце призыв к действию сделать заказ.
+5. Пока можешь направить вопрос основателю проекта кнопка написать."""
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
@@ -265,8 +273,8 @@ async def handle_examples_reviews(message: types.Message):
     top_review = "Анастасия, мама двоих — ★★★★★ С двумя детьми и работой времени на глажку не оставалось совсем. Одежда копилась неделями, я уже смирилась, что будем ходить помятыми. Заказала ПогладьБот — и на следующий день всё вернули аккуратное, сложенное, будто новое. Чувствую себя человеком, а не вечной прачкой."
     await message.answer_photo(photo='AgACAgIAAxkBAAIEDWjdZ7xFZQfMjyEXmqD2UIKlWzO5AALq_jEbkOvpSqrckIaGN9YvAQADAgADeQADNgQ', caption=top_review)
     
-    # Остальные отзывы с распределенными фотографиями
-    reviews_group1 = """Отзывы 1-5:
+    # Офер 1 (группа 1-5 с фото)
+    reviews_group1 = """Офер 1: Отзывы 1-5
 1. Марина, 34 — ★★★★★ Сервис выручает каждую неделю. Всё чётко. Крайне рекомендую.
 2. Андрей, 29 — ★★★★★ Рубашки идеальные, приехали. Мне нравится.
 3. Лидия, 56 — ★★★★★ Очень удобно для меня, спасибо.
@@ -274,14 +282,16 @@ async def handle_examples_reviews(message: types.Message):
 5. Павел, 37 — ★★★★★ Приятно удивлён качеством и скоростью."""
     await message.answer_photo(photo='AgACAgIAAxkBAAIEBWjdZ2AFss5xKwQJan-OuPo8cZS0AALd_jEbkOvpSpFD-iw9jQuHAQADAgADeQADNgQ', caption=reviews_group1)
     
-    reviews_group2 = """Отзывы 6-9:
+    # Офер 2 (группа 6-9 с фото)
+    reviews_group2 = """Офер 2: Отзывы 6-9
 6. ★★★★★ Быстро и идеально!
 7. ★★★★★ Лучший сервис!
 8. ★★★★★ Вещи — огонь!
 9. ★★★★★ Идеально"""
     await message.answer_photo(photo='AgACAgIAAxkBAAIEB2jdZ3cnQwAB1nqVx_3qOiNdK0bGygAC4f4xG5Dr6UogN6n-4DG-ggEAAwIAA3kAAzYE', caption=reviews_group2)
     
-    reviews_group3 = """Отзывы 10-14:
+    # Офер 3 (группа 10-14 с фото)
+    reviews_group3 = """Офер 3: Отзывы 10-14
 10. Светлана, 67 лет — ★★★★★ Здоровье уже не то, тяжёлый утюг держать сложно. А выглядеть опрятно хочется. Очень благодарна сервису - курьер забирает и возвращает вещи, всё отглажено с душой. Для меня это больше, чем просто услуга.
 11. Максим, отец семейства - ★★★★★ Мы с женой постоянно спорили: кому гладить горы школьной формы и наши рубашки. С ПогладьБот этот вопрос отпал. Никаких конфликтов, вещи приходят чистые, сложенные, дети довольны, и мы тоже.
 12. Кира, студентка — ★★★★★ Сессия, подработки и готовка — и времени на глажку не было совсем. Я привыкла носить мятые вещи, честно. Попробовала сервис ради интереса и теперь заказываю регулярно. Это такой кайф — просто носить всё чистое и аккуратное, а не тратить ночь перед экзаменом на утюг.
@@ -289,19 +299,12 @@ async def handle_examples_reviews(message: types.Message):
 14. Полина, маркетолог — ★★★★★ У нас с мужем маленький ребёнок, и я думала, что глажка — это неизбежно и бесконечно. Но сервис показал, что можно жить по-другому. Теперь я провожу вечер с ребёнком, а не с гладильной доской. Это реально про качество жизни."""
     await message.answer_photo(photo='AgACAgIAAxkBAAIECWjdZ4ci5UEa6lInky19EpffuZORAALj_jEbkOvpSilMEP3byErwAQADAgADeQADNgQ', caption=reviews_group3)
     
-    reviews_group4 = """Отзывы 15-18:
-15. ★★★★★ Не ожидал такого сервиса в нашем городе. Очень удобно!
-16. ★★★★★ Курьер всегда вежливый, вещи в пакетах, всё чисто и аккуратно.
-17. ★★★★★ Экономия нервов и времени. Пять звёзд!
-18. ★★★★★ Сначала сомневалась, а теперь заказываю каждую неделю."""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEC2jdZ6sAAfgCFZS2watT0AbLtGGTqAAC6P4xG5Dr6UoQSp_vf5o0mAEAAwIAA3kAAzYE', caption=reviews_group4)
-    
+    # Призыв к действию
+    call_to_action = "Не откладывайте — сделайте заказ сейчас и сэкономьте время!"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Хочу так же", callback_data="make_order")],
-        [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
-        [InlineKeyboardButton(text="Оставить отзыв", callback_data="leave_review")],
+        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
     ])
-    await message.answer("Действия:", reply_markup=keyboard)
+    await message.answer(call_to_action, reply_markup=keyboard)
 
 # О нас
 async def handle_about_us(message: types.Message):
@@ -324,9 +327,9 @@ async def handle_about_us(message: types.Message):
 
 # Техподдержка
 async def handle_support(message: types.Message):
-    text = "Напиши твой вопрос нам, мы ответим (пока можешь направить на личку Олегу)"
+    text = "Пока можешь направить вопрос основателю проекта"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Написать Олегу", url="https://t.me/OlegMahalov")],
+        [InlineKeyboardButton(text="Написать основателю", url="https://t.me/OlegMahalov")],
     ])
     await message.answer(text, reply_markup=keyboard)
 
