@@ -17,7 +17,7 @@ if platform.system() == "Windows":
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = '8431173012:AAHAXemmpqtsSygY08xYKg__8pkh2ka3ZnQ'
+TOKEN = '8431173012:AAGLU7aN9DlIfIHt7E7ZAgjMg7ZUDp6rY0c'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
