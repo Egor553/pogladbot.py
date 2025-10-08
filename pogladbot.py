@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from datetime import datetime, timedelta
 import logging
+import aiogram.exceptions as ae  # Импорт исключений aiogram
 
 # Настройка цикла событий для Windows
 if platform.system() == "Windows":
@@ -25,7 +26,7 @@ class OrderStates(StatesGroup):
     selecting_tariff = State()
     entering_address = State()
     entering_time = State()
-    entering_date = State()  # Новое состояние для ввода даты
+    entering_date = State()
     entering_phone = State()
     confirming_order = State()
     selecting_payment_method = State()
@@ -58,15 +59,23 @@ def get_start_menu():
     return keyboard
 
 # /start
-@dp.message(Command('start', 'Старт', 'start'))
+@dp.message(Command(commands=['start', 'старт']))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
-    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
-    await message.answer(value_text, reply_markup=get_start_menu())
+    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
+
+Что умеет бот:
+* Экономит до 5 часов в неделю на глажке 💘
+* Курьер бесплатно забирает и доставляет вещи 🚚
+* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
+* Абонементы и акции для постоянных клиентов 🎁
+* Интеграция с AmoCRM для трекинга заказов 📊
+* 24 часа на обработку — быстро и надежно ⏱️"""
+    
+    # Вставка видео с полученным file_id
+    await message.answer_video(video='BAACAgIAAxkBAAIFamjmseBYjm6p6XIhRzXJ_CoknhS4AAKwgwACNEo4S9T8BovJAUfONgQ', caption=welcome_text, reply_markup=get_start_menu())
 
 # Callback handler
 @dp.callback_query()
@@ -85,8 +94,6 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await handle_support(callback.message)
         elif data.startswith("tariff_type_"):
             await handle_tariff_type(callback, state)
-        elif data.startswith("tariff_"):
-            await handle_select_tariff(callback, state)
         elif data == "change_address":
             await state.set_state(OrderStates.entering_address)
             await callback.message.answer("Введите новый адрес:")
@@ -125,19 +132,45 @@ async def handle_make_order(message: types.Message, state: FSMContext):
 Курьер — бесплатно. Срок: привозим вещи на следующий день."""
     await message.answer(text_tariffs)
     
-    await message.answer("Выберите количество вещей:")
-    await state.set_state(OrderStates.selecting_tariff)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Поштучно (250 руб/шт)", callback_data="tariff_type_single")],
+        [InlineKeyboardButton(text="10 вещей (2000 руб)", callback_data="tariff_type_10")],
+        [InlineKeyboardButton(text="10 вещей со стиркой (3000 руб)", callback_data="tariff_type_10wash")],
+    ])
+    await message.answer("Выберите тариф:", reply_markup=keyboard)
+    await state.set_state(OrderStates.selecting_tariff_type)
 
-# Выбор количества вещей
+# Обработчик выбора типа тарифа
+async def handle_tariff_type(callback: types.CallbackQuery, state: FSMContext):
+    data = callback.data
+    if data == "tariff_type_single":
+        await callback.message.answer("Введите количество вещей:")
+        await state.set_state(OrderStates.selecting_tariff)
+    elif data == "tariff_type_10":
+        await state.update_data(tariff_type="10", quantity=10, base_price=2000)
+        await callback.message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
+        await state.set_state(OrderStates.entering_address)
+    elif data == "tariff_type_10wash":
+        await state.update_data(tariff_type="10wash", quantity=10, base_price=3000)
+        await callback.message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
+        await state.set_state(OrderStates.entering_address)
+
+# Выбор количества вещей (для поштучного тарифа)
 @dp.message(OrderStates.selecting_tariff)
 async def handle_select_items(message: types.Message, state: FSMContext):
+    if message.text is None:
+        await message.answer("Пожалуйста, введите число вещей текстом, например: 5")
+        return
     try:
         quantity = int(message.text)
-        await state.update_data(quantity=quantity)
+        if quantity <= 0:
+            raise ValueError
+        base_price = 250 * quantity
+        await state.update_data(tariff_type="single", quantity=quantity, base_price=base_price)
         await message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
         await state.set_state(OrderStates.entering_address)
     except ValueError:
-        await message.answer("Введите число вещей, например: 5")
+        await message.answer("Введите положительное число вещей, например: 5")
 
 # Адрес
 @dp.message(OrderStates.entering_address)
@@ -150,25 +183,25 @@ async def handle_address(message: types.Message, state: FSMContext):
 @dp.message(OrderStates.entering_time)
 async def handle_time(message: types.Message, state: FSMContext):
     try:
-        time_str = message.text.strip()
+        time_str = message.text.strip().replace(' ', '')
         dt_time = datetime.strptime(time_str, "%H:%M")
-        await state.update_data(time=time_str)
+        await state.update_data(time=dt_time.strftime("%H:%M"))
         await message.answer("Укажите дату (дд.мм.гг):")
         await state.set_state(OrderStates.entering_date)
-    except ValueError as e:
-        await message.answer("Неверный формат времени. Используйте формат: чч:мм (например, 18:00). Попробуйте снова.")
+    except ValueError:
+        await message.answer("Неверный формат времени. Используйте чч:мм (например, 18:00). Попробуйте снова.")
 
 # Дата
 @dp.message(OrderStates.entering_date)
 async def handle_date(message: types.Message, state: FSMContext):
     try:
-        date_str = message.text.strip()
+        date_str = message.text.strip().replace(' ', '')
         dt_date = datetime.strptime(date_str, "%d.%m.%y")
-        await state.update_data(date=date_str)
+        await state.update_data(date=dt_date.strftime("%d.%m.%y"))
         await message.answer("Введите ваш номер телефона:", reply_markup=ReplyKeyboardRemove())
         await state.set_state(OrderStates.entering_phone)
-    except ValueError as e:
-        await message.answer("Неверный формат даты. Используйте формат: дд.мм.гг (например, 02.10.25). Попробуйте снова.")
+    except ValueError:
+        await message.answer("Неверный формат даты. Используйте дд.мм.гг (например, 02.10.25). Попробуйте снова.")
 
 # Номер телефона
 @dp.message(OrderStates.entering_phone)
@@ -179,19 +212,19 @@ async def handle_phone(message: types.Message, state: FSMContext):
 # Подтверждение
 async def show_confirmation(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    tariff = f"{data.get('quantity', 0)} вещей по тарифу (см. выше)"
+    tariff_type = data.get('tariff_type', 'Не указан')
+    quantity = data.get('quantity', 0)
+    tariff = f"{quantity} вещей ({tariff_type})"
     address = data.get('address', 'Не указан')
     time = data.get('time', 'Не указано')
     date = data.get('date', 'Не указано')
     phone = data.get('phone', 'Не указан')
-    quantity = data.get('quantity', 0)
     first_order = users.get(message.from_user.id, {}).get('first_order', True)
     
-    base_price = 250 * quantity if quantity <= 10 else (2000 if quantity == 10 else 3000)
+    base_price = data.get('base_price', 0)
+    price = base_price
     if first_order:
-        price = base_price * 2 / 3  # 2/3 от стоимости для первого заказа
-    else:
-        price = base_price  # Полная стоимость для остальных
+        price = base_price * 2 / 3
     
     text = f"""Итог:
 * Тариф: {tariff}
@@ -243,17 +276,31 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-* Вы делаете заказ — прямо в боте.
-* Курьер бесплатно приезжает — забирает вещи, которые вы заранее собрали в пакет в удобное время.
-* Мы гладим профессионально — аккуратно, бережно, быстро.
-* Курьер доставляет обратно — чистые и выглаженные вещи возвращаются к вам. Таким образом, единственная Ваша задача — оформить заказ в боте и собрать вещи в пакет 😊"""
+1. Вы оформляете заказ в боте, указывая тариф, адрес, время, дату и телефон.
+2. Курьер бесплатно забирает вещи по указанному адресу в назначенное время.
+3. Наша команда гладит (и стирает при выборе тарифа) вещи с гарантией качества.
+4. В течение 24 часов (обычно на следующий день) курьер доставляет вещи обратно.
+5. Вы оплачиваете услугу курьеру и можете оставить отзыв."""
     
+    await message.answer(text)
+    
+    # Добавляем картинку успешных работ (используем один из file_id как пример; замените на актуальный если нужно)
+    await message.answer_photo(photo='AgACAgIAAxkBAAIEDWjdZ7xFZQfMjyEXmqD2UIKlWzO5AALq_jEbkOvpSqrckIaGN9YvAQADAgADeQADNgQ', caption="Примеры успешных работ")
+    
+    # Добавляем 3 отзыва (оферы)
+    reviews_text = """Отзывы:
+1. Анастасия, мама двоих — ★★★★★ С двумя детьми и работой времени на глажку не оставалось совсем. Одежда копилась неделями, я уже смирилась, что будем ходить помятыми. Заказала ПогладьБот — и на следующий день всё вернули аккуратное, сложенное, будто новое.
+2. Андрей, 29 — ★★★★★ Рубашки идеальные, приехали. Мне нравится.
+3. Лидия, 56 — ★★★★★ Очень удобно для меня, спасибо."""
+    await message.answer(reviews_text)
+    
+    # Призыв к действию
+    call_to_action = "Не откладывайте — сделайте заказ сейчас и сэкономьте время!"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
-        [InlineKeyboardButton(text="Оформить заказ", callback_data="make_order")],
     ])
-    
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(call_to_action, reply_markup=keyboard)
 
 # Успешные примеры и отзывы
 async def handle_examples_reviews(message: types.Message):
@@ -261,43 +308,33 @@ async def handle_examples_reviews(message: types.Message):
     top_review = "Анастасия, мама двоих — ★★★★★ С двумя детьми и работой времени на глажку не оставалось совсем. Одежда копилась неделями, я уже смирилась, что будем ходить помятыми. Заказала ПогладьБот — и на следующий день всё вернули аккуратное, сложенное, будто новое. Чувствую себя человеком, а не вечной прачкой."
     await message.answer_photo(photo='AgACAgIAAxkBAAIEDWjdZ7xFZQfMjyEXmqD2UIKlWzO5AALq_jEbkOvpSqrckIaGN9YvAQADAgADeQADNgQ', caption=top_review)
     
-    # Остальные отзывы с распределенными фотографиями (рационально поделены: по одной на группу отзывов)
-    reviews_group1 = """Отзывы 1-5:
+    # Офер 1 (3 отзыва с фото)
+    offer1 = """Офер 1:
 1. Марина, 34 — ★★★★★ Сервис выручает каждую неделю. Всё чётко. Крайне рекомендую.
 2. Андрей, 29 — ★★★★★ Рубашки идеальные, приехали. Мне нравится.
-3. Лидия, 56 — ★★★★★ Очень удобно для меня, спасибо.
-4. Оксана, 41 — ★★★★★ Глажка — не мой конёк, теперь всё за меня делают, спасибо!!!
-5. Павел, 37 — ★★★★★ Приятно удивлён качеством и скоростью."""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEBWjdZ2AFss5xKwQJan-OuPo8cZS0AALd_jEbkOvpSpFD-iw9jQuHAQADAgADeQADNgQ', caption=reviews_group1)
+3. Лидия, 56 — ★★★★★ Очень удобно для меня, спасибо."""
+    await message.answer_photo(photo='AgACAgIAAxkBAAIEBWjdZ2AFss5xKwQJan-OuPo8cZS0AALd_jEbkOvpSpFD-iw9jQuHAQADAgADeQADNgQ', caption=offer1)
     
-    reviews_group2 = """Отзывы 6-9:
-6. ★★★★★ Быстро и идеально!
+    # Офер 2 (3 отзыва с фото)
+    offer2 = """Офер 2:
+4. Оксана, 41 — ★★★★★ Глажка — не мой конёк, теперь всё за меня делают, спасибо!!!
+5. Павел, 37 — ★★★★★ Приятно удивлён качеством и скоростью.
+6. ★★★★★ Быстро и идеально!"""
+    await message.answer_photo(photo='AgACAgIAAxkBAAIEB2jdZ3cnQwAB1nqVx_3qOiNdK0bGygAC4f4xG5Dr6UogN6n-4DG-ggEAAwIAA3kAAzYE', caption=offer2)
+    
+    # Офер 3 (3 отзыва с фото)
+    offer3 = """Офер 3:
 7. ★★★★★ Лучший сервис!
 8. ★★★★★ Вещи — огонь!
 9. ★★★★★ Идеально"""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEB2jdZ3cnQwAB1nqVx_3qOiNdK0bGygAC4f4xG5Dr6UogN6n-4DG-ggEAAwIAA3kAAzYE', caption=reviews_group2)
+    await message.answer_photo(photo='AgACAgIAAxkBAAIECWjdZ4ci5UEa6lInky19EpffuZORAALj_jEbkOvpSilMEP3byErwAQADAgADeQADNgQ', caption=offer3)
     
-    reviews_group3 = """Отзывы 10-14:
-10. Светлана, 67 лет — ★★★★★ Здоровье уже не то, тяжёлый утюг держать сложно. А выглядеть опрятно хочется. Очень благодарна сервису - курьер забирает и возвращает вещи, всё отглажено с душой. Для меня это больше, чем просто услуга.
-11. Максим, отец семейства - ★★★★★ Мы с женой постоянно спорили: кому гладить горы школьной формы и наши рубашки. С ПогладьБот этот вопрос отпал. Никаких конфликтов, вещи приходят чистые, сложенные, дети довольны, и мы тоже.
-12. Кира, студентка — ★★★★★ Сессия, подработки и готовка — и времени на глажку не было совсем. Я привыкла носить мятые вещи, честно. Попробовала сервис ради интереса и теперь заказываю регулярно. Это такой кайф — просто носить всё чистое и аккуратное, а не тратить ночь перед экзаменом на утюг.
-13. Игорь, айтишник — ★★★★★ Работаю из дома, но постоянно участвую в онлайн-встречах. В мятой футболке ещё сойдёт, а вот рубашки — позор. Жена устала мне напоминать, я сам всё откладывал. Теперь раз в неделю отдаю вещи, и вопрос закрыт. Выгляжу как человек, а времени на это не трачу.
-14. Полина, маркетолог — ★★★★★ У нас с мужем маленький ребёнок, и я думала, что глажка — это неизбежно и бесконечно. Но сервис показал, что можно жить по-другому. Теперь я провожу вечер с ребёнком, а не с гладильной доской. Это реально про качество жизни."""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIECWjdZ4ci5UEa6lInky19EpffuZORAALj_jEbkOvpSilMEP3byErwAQADAgADeQADNgQ', caption=reviews_group3)
-    
-    reviews_group4 = """Отзывы 15-18:
-15. ★★★★★ Не ожидал такого сервиса в нашем городе. Очень удобно!
-16. ★★★★★ Курьер всегда вежливый, вещи в пакетах, всё чисто и аккуратно.
-17. ★★★★★ Экономия нервов и времени. Пять звёзд!
-18. ★★★★★ Сначала сомневалась, а теперь заказываю каждую неделю."""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEC2jdZ6sAAfgCFZS2watT0AbLtGGTqAAC6P4xG5Dr6UoQSp_vf5o0mAEAAwIAA3kAAzYE', caption=reviews_group4)
-    
+    # Призыв к действию
+    call_to_action = "Не откладывайте — сделайте заказ сейчас и сэкономьте время!"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Хочу так же", callback_data="make_order")],
-        [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
-        [InlineKeyboardButton(text="Оставить отзыв", callback_data="leave_review")],
+        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
     ])
-    await message.answer("Действия:", reply_markup=keyboard)
+    await message.answer(call_to_action, reply_markup=keyboard)
 
 # О нас
 async def handle_about_us(message: types.Message):
@@ -320,19 +357,25 @@ async def handle_about_us(message: types.Message):
 
 # Техподдержка
 async def handle_support(message: types.Message):
-    text = "Напиши твой вопрос нам, мы ответим (пока можешь направить на личку Олегу)"
+    text = "Пока можешь направить вопрос основателю проекта"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Написать Олегу", url="https://t.me/OlegMahalov")],
+        [InlineKeyboardButton(text="Написать основателю", url="https://t.me/OlegMahalov")],
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий
+# Хэндлер для обработки фотографий и видео
 @dp.message()
-async def handle_photo(message: types.Message):
+async def handle_photo_or_video(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
+        logging.info(f"Получен file_id: {file_id}")
+    if message.video:
+        video = message.video
+        file_id = video.file_id
+        await message.answer(f"Получен video file_id: {file_id}")
+        logging.info(f"Получен video file_id: {file_id}")
 
 # Автосообщения
 async def check_inactive_users():
@@ -341,23 +384,24 @@ async def check_inactive_users():
         for user_id, info in list(users.items()):
             delta = (now - info['last_activity']).total_seconds() / 60
             if delta > 3 and 'sent_3min' not in info:
-                await bot.send_message(user_id, "На первый заказ действует акция — каждая третья вещь бесплатно 😄\nПодробнее — в боте.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")]]))
-                info['sent_3min'] = True
+                try:
+                    await bot.send_message(user_id, "На первый заказ действует акция — каждая третья вещь бесплатно 😄\nПодробнее — в боте.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")]]))
+                    info['sent_3min'] = True
+                except ae.TelegramRetryAfter as e:
+                    logging.warning(f"Flood limit hit on send_message, retry after {e.retry_after} seconds")
+                    await asyncio.sleep(e.retry_after)
+                except Exception as e:
+                    logging.error(f"Error sending inactive message: {e}")
         await asyncio.sleep(60)
 
 # Запуск
 async def main():
     try:
-        # Запуск фонового задания для проверки неактивных пользователей
         inactive_task = asyncio.create_task(check_inactive_users())
-        
-        # Запуск цикла опроса
         await dp.start_polling(bot)
     except (asyncio.CancelledError, KeyboardInterrupt):
-        # Остановка бота при прерывании
         logging.info("Получен запрос на остановку бота. Выполняется graceful shutdown...")
-        await asyncio.sleep(5)  # Задержка для избежания flood control
-        await bot.close()
+        await asyncio.sleep(5)
         if not inactive_task.done():
             inactive_task.cancel()
             try:
@@ -368,8 +412,15 @@ async def main():
         logging.error(f"Ошибка при запуске поллинга: {e}")
         raise SystemExit("Не удалось запустить бота. Проверьте токен и соединение.")
     finally:
-        await asyncio.sleep(5)  # Дополнительная задержка перед окончательным закрытием
-        await bot.close()
+        await asyncio.sleep(5)
+        try:
+            await bot.close()
+        except ae.TelegramRetryAfter as e:
+            logging.warning(f"Flood limit hit on close, retry after {e.retry_after} seconds")
+            await asyncio.sleep(e.retry_after)
+            await bot.close()  # Повторная попытка
+        except Exception as e:
+            logging.error(f"Error during bot close: {e}")
         logging.info("Бот остановлен.")
 
 if __name__ == '__main__':
