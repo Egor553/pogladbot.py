@@ -8,7 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from datetime import datetime, timedelta
 import logging
-import aiogram.exceptions as ae  # Импорт исключений aiogram
+import random
 
 # Настройка цикла событий для Windows
 if platform.system() == "Windows":
@@ -18,7 +18,7 @@ if platform.system() == "Windows":
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = '8431173012:AAGLU7aN9DlIfIHt7E7ZAgjMg7ZUDp6rY0c'
+TOKEN = '8431173012:AAHAXemmpqtsSygY08xYKg__8pkh2ka3ZnQ'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
@@ -59,23 +59,18 @@ def get_start_menu():
     return keyboard
 
 # /start
-@dp.message(Command(commands=['start', 'старт']))
+@dp.message(Command('start', 'Старт', 'start'))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
-
-Что умеет бот:
-* Экономит до 5 часов в неделю на глажке 💘
-* Курьер бесплатно забирает и доставляет вещи 🚚
-* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
-* Абонементы и акции для постоянных клиентов 🎁
-* Интеграция с AmoCRM для трекинга заказов 📊
-* 24 часа на обработку — быстро и надежно ⏱️"""
+    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
+    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
     
-    # Вставка видео с полученным file_id
-    await message.answer_video(video='BAACAgIAAxkBAAIFamjmseBYjm6p6XIhRzXJ_CoknhS4AAKwgwACNEo4S9T8BovJAUfONgQ', caption=welcome_text, reply_markup=get_start_menu())
+    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
+    await message.answer_video(video='YOUR_VIDEO_FILE_ID', caption=value_text)
+    
+    await message.answer(value_text, reply_markup=get_start_menu())
 
 # Callback handler
 @dp.callback_query()
@@ -122,40 +117,23 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
 
 # Сделать заказ
 async def handle_make_order(message: types.Message, state: FSMContext):
-    text = "У нас есть сюрприз для вас 🎁\nНа первый заказ действует акция — каждая третья вещь бесплатно:\nПлатите за 2, гладим 3\nПлатите за 4, гладим 6\nПлатите за 10, гладим 15"
-    await message.answer(text)
+    text = "У нас есть сюрприз для вас 🎁\nНа первый заказ действует акция — каждая третья вещь бесплатно\nПлатите за 2, гладим 3\nПлатите за 4, гладим 6\nПлатите за 10, гладим 15"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
+    ])
+    await message.answer(text, reply_markup=keyboard)
     
     text_tariffs = """Наши тарифы:
-* Любая одежда - 250 рублей
-* 10 любых вещей - 2000 рублей
-* 10 любых вещей со стиркой - 3000 рублей
+Любая одежда - 250 рублей
+10 любых вещей - 2000 рублей
+10 любых вещей со стиркой - 3000
 Курьер — бесплатно. Срок: привозим вещи на следующий день."""
     await message.answer(text_tariffs)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Поштучно (250 руб/шт)", callback_data="tariff_type_single")],
-        [InlineKeyboardButton(text="10 вещей (2000 руб)", callback_data="tariff_type_10")],
-        [InlineKeyboardButton(text="10 вещей со стиркой (3000 руб)", callback_data="tariff_type_10wash")],
-    ])
-    await message.answer("Выберите тариф:", reply_markup=keyboard)
-    await state.set_state(OrderStates.selecting_tariff_type)
+    await message.answer("Выберите количество вещей:")
+    await state.set_state(OrderStates.selecting_tariff)
 
-# Обработчик выбора типа тарифа
-async def handle_tariff_type(callback: types.CallbackQuery, state: FSMContext):
-    data = callback.data
-    if data == "tariff_type_single":
-        await callback.message.answer("Введите количество вещей:")
-        await state.set_state(OrderStates.selecting_tariff)
-    elif data == "tariff_type_10":
-        await state.update_data(tariff_type="10", quantity=10, base_price=2000)
-        await callback.message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
-        await state.set_state(OrderStates.entering_address)
-    elif data == "tariff_type_10wash":
-        await state.update_data(tariff_type="10wash", quantity=10, base_price=3000)
-        await callback.message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
-        await state.set_state(OrderStates.entering_address)
-
-# Выбор количества вещей (для поштучного тарифа)
+# Выбор количества вещей
 @dp.message(OrderStates.selecting_tariff)
 async def handle_select_items(message: types.Message, state: FSMContext):
     if message.text is None:
@@ -163,14 +141,11 @@ async def handle_select_items(message: types.Message, state: FSMContext):
         return
     try:
         quantity = int(message.text)
-        if quantity <= 0:
-            raise ValueError
-        base_price = 250 * quantity
-        await state.update_data(tariff_type="single", quantity=quantity, base_price=base_price)
+        await state.update_data(quantity=quantity)
         await message.answer("Введите адрес в свободной форме: Например: Ленина, 76")
         await state.set_state(OrderStates.entering_address)
     except ValueError:
-        await message.answer("Введите положительное число вещей, например: 5")
+        await message.answer("Введите число вещей, например: 5")
 
 # Адрес
 @dp.message(OrderStates.entering_address)
@@ -212,19 +187,19 @@ async def handle_phone(message: types.Message, state: FSMContext):
 # Подтверждение
 async def show_confirmation(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    tariff_type = data.get('tariff_type', 'Не указан')
-    quantity = data.get('quantity', 0)
-    tariff = f"{quantity} вещей ({tariff_type})"
+    tariff = f"{data.get('quantity', 0)} вещей по тарифу (см. выше)"
     address = data.get('address', 'Не указан')
     time = data.get('time', 'Не указано')
     date = data.get('date', 'Не указано')
     phone = data.get('phone', 'Не указан')
+    quantity = data.get('quantity', 0)
     first_order = users.get(message.from_user.id, {}).get('first_order', True)
     
-    base_price = data.get('base_price', 0)
-    price = base_price
+    base_price = 250 * quantity if quantity <= 10 else (2000 if quantity == 10 else 3000)
     if first_order:
-        price = base_price * 2 / 3
+        price = base_price * 2 / 3  # 2/3 от стоимости для первого заказа
+    else:
+        price = base_price  # Полная стоимость для остальных
     
     text = f"""Итог:
 * Тариф: {tariff}
@@ -276,31 +251,17 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-1. Вы оформляете заказ в боте, указывая тариф, адрес, время, дату и телефон.
-2. Курьер бесплатно забирает вещи по указанному адресу в назначенное время.
-3. Наша команда гладит (и стирает при выборе тарифа) вещи с гарантией качества.
-4. В течение 24 часов (обычно на следующий день) курьер доставляет вещи обратно.
-5. Вы оплачиваете услугу курьеру и можете оставить отзыв."""
+* Вы делаете заказ — прямо в боте.
+* Курьер бесплатно приезжает — забирает вещи, которые вы заранее собрали в пакет в удобное время.
+* Мы гладим профессионально — аккуратно, бережно, быстро.
+* Курьер доставляет обратно — чистые и выглаженные вещи возвращаются к вам. Таким образом, единственная Ваша задача — оформить заказ в боте и собрать вещи в пакет 😊"""
     
-    await message.answer(text)
-    
-    # Добавляем картинку успешных работ (используем один из file_id как пример; замените на актуальный если нужно)
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEDWjdZ7xFZQfMjyEXmqD2UIKlWzO5AALq_jEbkOvpSqrckIaGN9YvAQADAgADeQADNgQ', caption="Примеры успешных работ")
-    
-    # Добавляем 3 отзыва (оферы)
-    reviews_text = """Отзывы:
-1. Анастасия, мама двоих — ★★★★★ С двумя детьми и работой времени на глажку не оставалось совсем. Одежда копилась неделями, я уже смирилась, что будем ходить помятыми. Заказала ПогладьБот — и на следующий день всё вернули аккуратное, сложенное, будто новое.
-2. Андрей, 29 — ★★★★★ Рубашки идеальные, приехали. Мне нравится.
-3. Лидия, 56 — ★★★★★ Очень удобно для меня, спасибо."""
-    await message.answer(reviews_text)
-    
-    # Призыв к действию
-    call_to_action = "Не откладывайте — сделайте заказ сейчас и сэкономьте время!"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
+        [InlineKeyboardButton(text="Оформить заказ", callback_data="make_order")],
     ])
-    await message.answer(call_to_action, reply_markup=keyboard)
+    
+    await message.answer(text, reply_markup=keyboard)
 
 # Успешные примеры и отзывы
 async def handle_examples_reviews(message: types.Message):
@@ -352,7 +313,6 @@ async def handle_about_us(message: types.Message):
         [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
         [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
     ])
-    
     await message.answer(text, reply_markup=keyboard)
 
 # Техподдержка
@@ -363,19 +323,13 @@ async def handle_support(message: types.Message):
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий и видео
+# Хэндлер для обработки фотографий
 @dp.message()
-async def handle_photo_or_video(message: types.Message):
+async def handle_photo(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
-        logging.info(f"Получен file_id: {file_id}")
-    if message.video:
-        video = message.video
-        file_id = video.file_id
-        await message.answer(f"Получен video file_id: {file_id}")
-        logging.info(f"Получен video file_id: {file_id}")
 
 # Автосообщения
 async def check_inactive_users():
@@ -384,14 +338,8 @@ async def check_inactive_users():
         for user_id, info in list(users.items()):
             delta = (now - info['last_activity']).total_seconds() / 60
             if delta > 3 and 'sent_3min' not in info:
-                try:
-                    await bot.send_message(user_id, "На первый заказ действует акция — каждая третья вещь бесплатно 😄\nПодробнее — в боте.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")]]))
-                    info['sent_3min'] = True
-                except ae.TelegramRetryAfter as e:
-                    logging.warning(f"Flood limit hit on send_message, retry after {e.retry_after} seconds")
-                    await asyncio.sleep(e.retry_after)
-                except Exception as e:
-                    logging.error(f"Error sending inactive message: {e}")
+                await bot.send_message(user_id, "На первый заказ действует акция — каждая третья вещь бесплатно 😄\nПодробнее — в боте.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")]]))
+                info['sent_3min'] = True
         await asyncio.sleep(60)
 
 # Запуск
@@ -402,6 +350,7 @@ async def main():
     except (asyncio.CancelledError, KeyboardInterrupt):
         logging.info("Получен запрос на остановку бота. Выполняется graceful shutdown...")
         await asyncio.sleep(5)
+        await bot.close()
         if not inactive_task.done():
             inactive_task.cancel()
             try:
@@ -413,14 +362,7 @@ async def main():
         raise SystemExit("Не удалось запустить бота. Проверьте токен и соединение.")
     finally:
         await asyncio.sleep(5)
-        try:
-            await bot.close()
-        except ae.TelegramRetryAfter as e:
-            logging.warning(f"Flood limit hit on close, retry after {e.retry_after} seconds")
-            await asyncio.sleep(e.retry_after)
-            await bot.close()  # Повторная попытка
-        except Exception as e:
-            logging.error(f"Error during bot close: {e}")
+        await bot.close()
         logging.info("Бот остановлен.")
 
 if __name__ == '__main__':
