@@ -8,7 +8,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from datetime import datetime, timedelta
 import logging
-import random
 
 # Настройка цикла событий для Windows
 if platform.system() == "Windows":
@@ -18,7 +17,7 @@ if platform.system() == "Windows":
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = '8431173012:AAHAXemmpqtsSygY08xYKg__8pkh2ka3ZnQ'
+TOKEN = '8431173012:AAE-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
@@ -64,13 +63,22 @@ async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
+    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
+
+Что умеет бот:
+* Экономит до 5 часов в неделю на глажке 💘
+* Курьер бесплатно забирает и доставляет вещи 🚚
+* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
+* Абонементы и акции для постоянных клиентов 🎁
+* Интеграция с AmoCRM для трекинга заказов 📊
+* 24 часа на обработку — быстро и надежно ⏱️"""
     
-    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
-    await message.answer_video(video='YOUR_VIDEO_FILE_ID', caption=value_text)
-    
-    await message.answer(value_text, reply_markup=get_start_menu())
+    # Отправка видео с подписью и клавиатурой
+    await message.answer_video(
+        video='BAACAgIAAxkBAAIFamjmseBYjm6p6XIhRzXJ_CoknhS4AAKwgwACNEo4S9T8BovJAUfONgQ',
+        caption=welcome_text,
+        reply_markup=get_start_menu()
+    )
 
 # Callback handler
 @dp.callback_query()
@@ -89,6 +97,8 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await handle_support(callback.message)
         elif data.startswith("tariff_type_"):
             await handle_tariff_type(callback, state)
+        elif data.startswith("tariff_"):
+            await handle_select_tariff(callback, state)
         elif data == "change_address":
             await state.set_state(OrderStates.entering_address)
             await callback.message.answer("Введите новый адрес:")
@@ -105,10 +115,8 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await handle_make_order(callback.message, state)
         elif data == "confirm_order":
             await show_payment_methods(callback.message, state)
-        elif data == "payment_card":
-            await handle_payment_method(callback, state, "card")
-        elif data == "payment_cash":
-            await handle_payment_method(callback, state, "cash")
+        elif data.startswith("payment_"):
+            await handle_payment_method(callback, state)
         elif data == "leave_review":
             await state.set_state(OrderStates.leaving_review)
             await callback.message.answer("Оставьте отзыв: укажите звезды (1-5), комментарий и разрешение на публикацию (да/нет). Формат: 5\nОтличный сервис!\nда")
@@ -119,16 +127,13 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
 
 # Сделать заказ
 async def handle_make_order(message: types.Message, state: FSMContext):
-    text = "У нас есть сюрприз для вас 🎁\nНа первый заказ действует акция — каждая третья вещь бесплатно\nПлатите за 2, гладим 3\nПлатите за 4, гладим 6\nПлатите за 10, гладим 15"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
-    ])
-    await message.answer(text, reply_markup=keyboard)
+    text = "У нас есть сюрприз для вас 🎁\nНа первый заказ действует акция — каждая третья вещь бесплатно:\nПлатите за 2, гладим 3\nПлатите за 4, гладим 6\nПлатите за 10, гладим 15"
+    await message.answer(text)
     
     text_tariffs = """Наши тарифы:
-Любая одежда - 250 рублей
-10 любых вещей - 2000 рублей
-10 любых вещей со стиркой - 3000
+* Любая одежда - 250 рублей
+* 10 любых вещей - 2000 рублей
+* 10 любых вещей со стиркой - 3000 рублей
 Курьер — бесплатно. Срок: привозим вещи на следующий день."""
     await message.answer(text_tariffs)
     
@@ -253,11 +258,11 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-1. Вы оформляете заказ в боте, указывая тариф, адрес, время, дату и телефон.
-2. Курьер бесплатно забирает вещи по указанному адресу в назначенное время.
-3. Наша команда гладит (и стирает при выборе тарифа) вещи с гарантией качества.
-4. В течение 24 часов (обычно на следующий день) курьер доставляет вещи обратно.
-5. Вы оплачиваете услугу курьеру и можете оставить отзыв."""
+1. Убрать стартовую картинку (что умеет бот на главный экран вставить видео, которое я тебе скинул, убери водяной знак и добавить надпись погладь).
+2. На главной экран вставь видео, которое я тебе скинул (убери водяной знак и добавь надпись 'Погладь').
+3. Исправить косяк со временем.
+4. Где этапы добавить картину успешных работ отзывы, выдая по 3 офера в конце призыв к действию сделать заказ.
+5. Пока можешь направить вопрос основателю проекта кнопка написать."""
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
@@ -310,14 +315,18 @@ async def handle_about_us(message: types.Message):
 * Гарантия: если результат не устроил — повторная обработка бесплатно или возврат средств.
 * Удобство: курьер бесплатно, можно сдавать вещи хоть каждый день.
 * Поддержка: живой оператор отвечает в рабочие часы, в остальное время — бот-помощник."""
-    await message.answer_photo(photo='AgACAgIAAxkBAAIED2jdZ-20723XKulmd-KCeY9ebsV3AALr_jEbkOvpSg1Zsk6-nJcNAQADAgADeQADNgQ', caption=text)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Сделать заказ", callback_data="make_order")],
         [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
     ])
-    await message.answer(text, reply_markup=keyboard)
-
+    
+    # Отправка фото с подписью и клавиатурой в одном сообщении
+    await message.answer_photo(
+        photo='AgACAgIAAxkBAAIED2jdZ-20723XKulmd-KCeY9ebsV3AALr_jEbkOvpSg1Zsk6-nJcNAQADAgADeQADNgQ',
+        caption=text,
+        reply_markup=keyboard
+    )
 # Техподдержка
 async def handle_support(message: types.Message):
     text = "Пока можешь направить вопрос основателю проекта"
@@ -326,13 +335,19 @@ async def handle_support(message: types.Message):
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий
+# Хэндлер для обработки фотографий и видео
 @dp.message()
-async def handle_photo(message: types.Message):
+async def handle_photo_or_video(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
+        logging.info(f"Получен file_id: {file_id}")
+    if message.video:
+        video = message.video
+        file_id = video.file_id
+        await message.answer(f"Получен video file_id: {file_id}")
+        logging.info(f"Получен video file_id: {file_id}")
 
 # Автосообщения
 async def check_inactive_users():
