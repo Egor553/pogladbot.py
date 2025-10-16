@@ -307,6 +307,34 @@ async def start_handler(message: types.Message):
         reply_markup=get_start_menu()
     )
 
+# Тестовая команда для проверки интеграции с amoCRM
+@dp.message(Command('test_amocrm'))
+async def test_amocrm_handler(message: types.Message):
+    try:
+        user_id = message.from_user.id
+        if user_id not in users:
+            users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
+
+        test_data = {
+            'phone': '+79990000000',
+            'address': 'Тестовый адрес, 1',
+            'time': '12:00',
+            'date': datetime.now().strftime('%d.%m.%y'),
+            'quantity': 3,
+        }
+
+        await message.answer('Создаю тестовую сделку в amoCRM...')
+        await create_amocrm_order(user_id, test_data, 'card', message.from_user)
+
+        lead_id = orders.get(user_id, {}).get('amocrm_lead_id')
+        if lead_id:
+            await message.answer(f'Готово. Создана тестовая сделка ID: {lead_id}. Проверьте в amoCRM воронку {amocrm_client.tokens.get("pipeline_id")}.')
+        else:
+            await message.answer('Не удалось создать тестовую сделку. Посмотрите логи сервера на предмет ошибок amoCRM.')
+    except Exception as e:
+        logging.error(f"Ошибка тестовой команды amoCRM: {e}")
+        await message.answer('Произошла ошибка при создании тестовой сделки. Проверьте логи.')
+
 # Callback handler
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
