@@ -1,6 +1,7 @@
 import asyncio
 import platform
-import requests
+import json
+import aiohttp
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -17,22 +18,207 @@ if platform.system() == "Windows":
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Токен бота
-TOKEN = '8431173012:AAEк-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
+# Класс для работы с amoCRM API
+class AmoCRMClient:
+    def __init__(self):
+        self.tokens_file = "amocrm_tokens.json"
+        self.tokens = self.load_tokens()
+        self.session = None
+        
+    def load_tokens(self):
+        try:
+            with open(self.tokens_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            logging.error(f"Файл токенов {self.tokens_file} не найден")
+            return {}
+        except json.JSONDecodeError as e:
+            logging.error(f"Ошибка парсинга JSON в файле токенов: {e}")
+            return {}
+    
+    def save_tokens(self):
+        try:
+            with open(self.tokens_file, 'w', encoding='utf-8') as f:
+                json.dump(self.tokens, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logging.error(f"Ошибка сохранения токенов: {e}")
+    
+    async def get_session(self):
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+    
+    async def close_session(self):
+        if self.session and not self.session.closed:
+            await self.session.close()
+    
+    def get_headers(self):
+        return {
+            'Authorization': f'Bearer {self.tokens.get("access_token", "")}',
+            'Content-Type': 'application/json'
+        }
+    
+    async def make_request(self, method, url, data=None, retries=3):
+        session = await self.get_session()
+        headers = self.get_headers()
+        
+        for attempt in range(retries):
+            try:
+                logging.info(f"AmoCRM API запрос: {method} {url}")
+                if data:
+                    logging.info(f"Тело запроса: {json.dumps(data, ensure_ascii=False)}")
+                
+                async with session.request(method, url, headers=headers, json=data) as response:
+                    response_text = await response.text()
+                    logging.info(f"AmoCRM API ответ: {response.status} - {response_text}")
+                    
+                    if response.status == 200 or response.status == 201:
+                        return await response.json()
+                    elif response.status == 401:
+                        logging.error("Ошибка авторизации amoCRM - проверьте токен")
+                        return None
+                    elif response.status == 429:
+                        wait_time = 2 ** attempt
+                        logging.warning(f"Rate limit amoCRM, ожидание {wait_time} секунд")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    elif response.status >= 500:
+                        wait_time = 5 * (attempt + 1)
+                        logging.warning(f"Ошибка сервера amoCRM {response.status}, ожидание {wait_time} секунд")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        logging.error(f"Ошибка amoCRM API: {response.status} - {response_text}")
+                        return None
+                        
+            except Exception as e:
+                logging.error(f"Ошибка запроса к amoCRM: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    return None
+        
+        return None
+    
+    async def get_account_info(self):
+        url = f"https://{self.tokens['api_domain']}/api/v4/account"
+        result = await self.make_request('GET', url)
+        if result:
+            account_data = result.get('account', {})
+            self.tokens['subdomain'] = account_data.get('subdomain')
+            self.tokens['account_id'] = account_data.get('id')
+            self.save_tokens()
+            logging.info(f"Получена информация об аккаунте: subdomain={self.tokens['subdomain']}, id={self.tokens['account_id']}")
+        return result
+    
+    async def get_pipeline_stages(self, pipeline_id):
+        url = f"https://{self.tokens['api_domain']}/api/v4/leads/pipelines/{pipeline_id}"
+        result = await self.make_request('GET', url)
+        if result:
+            pipeline_data = result.get('pipelines', [{}])[0]
+            stages = pipeline_data.get('_embedded', {}).get('stages', [])
+            if stages:
+                first_stage_id = stages[0]['id']
+                self.tokens['first_stage_id'] = first_stage_id
+                self.save_tokens()
+                logging.info(f"Получены этапы воронки {pipeline_id}, первый этап: {first_stage_id}")
+                return stages
+        return None
+    
+    async def find_contact_by_phone(self, phone):
+        url = f"https://{self.tokens['api_domain']}/api/v4/contacts"
+        params = {'query': phone}
+        result = await self.make_request('GET', url, params)
+        if result:
+            contacts = result.get('_embedded', {}).get('contacts', [])
+            for contact in contacts:
+                custom_fields = contact.get('custom_fields_values', [])
+                for field in custom_fields:
+                    if field.get('field_code') == 'PHONE':
+                        values = field.get('values', [])
+                        for value in values:
+                            if value.get('value') == phone:
+                                logging.info(f"Найден существующий контакт: {contact['id']}")
+                                return contact['id']
+        return None
+    
+    async def create_contact(self, name, phone, telegram_id):
+        url = f"https://{self.tokens['api_domain']}/api/v4/contacts"
+        data = {
+            "name": name,
+            "custom_fields_values": [
+                {
+                    "field_code": "PHONE",
+                    "values": [{"value": phone}]
+                }
+            ],
+            "note": f"Telegram ID: {telegram_id}"
+        }
+        result = await self.make_request('POST', url, data)
+        if result:
+            contact_id = result.get('_embedded', {}).get('contacts', [{}])[0]['id']
+            logging.info(f"Создан новый контакт: {contact_id}")
+            return contact_id
+        return None
+    
+    async def create_lead(self, name, price, contact_id, address, time, date, quantity, payment_method):
+        url = f"https://{self.tokens['api_domain']}/api/v4/leads"
+        data = {
+            "name": name,
+            "price": price,
+            "pipeline_id": int(self.tokens['pipeline_id']),
+            "status_id": int(self.tokens['first_stage_id']),
+            "_embedded": {
+                "contacts": [{"id": contact_id}]
+            },
+            "custom_fields_values": [
+                {
+                    "field_name": "Адрес доставки",
+                    "values": [{"value": address}]
+                },
+                {
+                    "field_name": "Время",
+                    "values": [{"value": time}]
+                },
+                {
+                    "field_name": "Дата",
+                    "values": [{"value": date}]
+                },
+                {
+                    "field_name": "Количество вещей",
+                    "values": [{"value": str(quantity)}]
+                },
+                {
+                    "field_name": "Способ оплаты",
+                    "values": [{"value": payment_method}]
+                }
+            ]
+        }
+        result = await self.make_request('POST', url, data)
+        if result:
+            lead_id = result.get('_embedded', {}).get('leads', [{}])[0]['id']
+            logging.info(f"Создана новая сделка: {lead_id}")
+            return lead_id
+        return None
+    
+    async def get_lead_notes(self, lead_id, since_timestamp=None):
+        url = f"https://{self.tokens['api_domain']}/api/v4/leads/{lead_id}/notes"
+        params = {}
+        if since_timestamp:
+            params['filter[created_at][from]'] = since_timestamp
+        
+        result = await self.make_request('GET', url, params)
+        if result:
+            notes = result.get('_embedded', {}).get('notes', [])
+            logging.info(f"Получено {len(notes)} примечаний для сделки {lead_id}")
+            return notes
+        return []
 
-# Токены AmoCRM (вставлены из amocrm_tokens.json)
-AMOCRM_TOKENS = {
-    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImIzNTQ1MDkxNGZkYTkzMTA3NThmZDNjNzU5NTE3YTMzNjJhM2FjOTkxYTc4NjE3ODAyNmM1ZDk3YjUzM2I0MGUzN2Y0MGQyNWJiMTc4OTg0In0.eyJhdWQiOiI4YzdjNzhkOS05YWI1LTQ4NjAtYTIyNi1jODY4OGYyNTVhMzgiLCJqdGkiOiJiMzU0NTA5MTRmZGE5MzEwNzU4ZmQzYzc1OTUxN2EzMzYyYTNhYzk5MWE3ODYxNzgwMjZjNWQ5N2I1MzNiNDBlMzdmNDBkMjViYjE3ODk4NCIsImlhdCI6MTc2MDYzNDkzNSwibmJmIjoxNzYwNjM0OTM1LCJleHAiOjE4NDA1NzkyMDAsInN1YiI6IjEyOTE0Njg2IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNjMyMDMwLCJiYXNlX2RvbWFpbiI6ImFtb2NybS5ydSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsIm5vdGlmaWNhdGlvbnMiXSwidXNlcl9mbGFncyI6MCwiaGFzaF91dWlkIjoiOWMxYTA5MDctOGFmYS00YTgyLTg0NzUtYzhlMjE1MjNiNjE2IiwiYXBpX2RvbWFpbiI6ImFwaS1iLmFtb2NybS5ydSJ9.RgBvamYffXi2rAQAR9mxuuRMhISfGsVNKLYekgI8ochnSKtBVUySwbwWUH5OLNNMNmuk9WmJaHYCoy5koN_WzWZTrsC-CkgJrD6VkocwyLj8D-kaO-r_bk8uOlS7GSVVsPrUumfWgXF_4SmNxnWRqe7ZwqPQz9W4OxL0z_K6aRvaXtSGIRZ6lLMt6RX156rmij-Lkk0YNbytr92kgWLWRbGpg6l9e50YaZAlEczOfWIqbu4mdMPiMeYuxfncPNt2t_six8HnjkaiHGfsOwXkaJXNW4-EEikhdWIRHMjBUzbBsAdnUc2Xz9vmMpC73sIGpVEOljNoNzLeO6mEmsZxew",
-    "integration_id": "8c7c78d9-9ab5-4860-a226-c8688f255a38",
-    "secret_key": "pxNPleWUHwWljqdRIPsa8xa77LKseLeIaIcjKW6U7HZn9k8M38cFbeAJON92A9rU",
-    "pipeline_id": "10143858",
-    "api_domain": "api-b.amocrm.ru",
-    "base_domain": "amocrm.ru",
-    "account_id": 32632030,
-    "subdomain": None,
-    "first_stage_id": None,
-    "last_check_timestamp": None
-}
+# Инициализация клиента amoCRM
+amocrm_client = AmoCRMClient()
+
+# Токен бота
+TOKEN = '8431173012:AAE-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
@@ -78,13 +264,22 @@ async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
-    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
+    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
+
+Что умеет бот:
+* Экономит до 5 часов в неделю на глажке 💘
+* Курьер бесплатно забирает и доставляет вещи 🚚
+* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
+* Абонементы и акции для постоянных клиентов 🎁
+* Интеграция с AmoCRM для трекинга заказов 📊
+* 24 часа на обработку — быстро и надежно ⏱️"""
     
-    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
-    await message.answer_video(video='YOUR_VIDEO_FILE_ID', caption=value_text)
-    
-    await message.answer(value_text, reply_markup=get_start_menu())
+    # Отправка видео с подписью и клавиатурой
+    await message.answer_video(
+        video='BAACAgIAAxkBAAIFamjmseBYjm6p6XIhRzXJ_CoknhS4AAKwgwACNEo4S9T8BovJAUfONgQ',
+        caption=welcome_text,
+        reply_markup=get_start_menu()
+    )
 
 # Callback handler
 @dp.callback_query()
@@ -101,10 +296,6 @@ async def callback_handler(callback: types.CallbackQuery, state: FSMContext):
             await handle_about_us(callback.message)
         elif data == "support":
             await handle_support(callback.message)
-        elif data.startswith("tariff_type_"):
-            await handle_tariff_type(callback, state)
-        elif data.startswith("tariff_"):
-            await handle_select_tariff(callback, state)
         elif data == "change_address":
             await state.set_state(OrderStates.entering_address)
             await callback.message.answer("Введите новый адрес:")
@@ -253,22 +444,77 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
     orders[user_id]['status'] = 'Принят'
     orders[user_id]['payment'] = payment
     
+    # Интеграция с amoCRM
+    try:
+        await create_amocrm_order(user_id, data, payment, callback.from_user)
+    except Exception as e:
+        logging.error(f"Ошибка создания заказа в amoCRM: {e}")
+        await callback.message.answer("⚠️ Заказ принят, но произошла ошибка при отправке в CRM. Обратитесь в поддержку.")
+    
     if payment == "card":
         await callback.message.answer("Заказ принят! Номер заявки: 12345. Оплатите картой курьеру при доставке.")
     elif payment == "cash":
         await callback.message.answer("Заказ принят! Номер заявки: 12345. Оплатите наличными курьеру при доставке.")
     
-    users[user_id]['first_order'] = False  # Отмечаем, что это не первый заказ
+    users[user_id]['first_order'] = False
     await state.clear()
+
+# Функция создания заказа в amoCRM
+async def create_amocrm_order(user_id, order_data, payment_method, user_info):
+    try:
+        # Получаем информацию о пользователе
+        name = f"{user_info.first_name or ''} {user_info.last_name or ''}".strip()
+        if not name:
+            name = user_info.username or f"Пользователь {user_id}"
+        
+        phone = order_data.get('phone', '')
+        address = order_data.get('address', '')
+        time = order_data.get('time', '')
+        date = order_data.get('date', '')
+        quantity = order_data.get('quantity', 0)
+        
+        # Рассчитываем цену
+        first_order = users.get(user_id, {}).get('first_order', True)
+        base_price = 250 * quantity if quantity <= 10 else (2000 if quantity == 10 else 3000)
+        price = int(base_price * 2 / 3) if first_order else base_price
+        
+        # Ищем существующий контакт по телефону
+        contact_id = await amocrm_client.find_contact_by_phone(phone)
+        
+        # Если контакт не найден, создаем новый
+        if not contact_id:
+            contact_id = await amocrm_client.create_contact(name, phone, user_id)
+            if not contact_id:
+                logging.error(f"Не удалось создать контакт для пользователя {user_id}")
+                return
+        
+        # Создаем сделку
+        lead_name = f"Заказ #{quantity} вещей - {name}"
+        payment_text = "картой курьеру" if payment_method == "card" else "наличными курьеру"
+        
+        lead_id = await amocrm_client.create_lead(
+            lead_name, price, contact_id, address, time, date, quantity, payment_text
+        )
+        
+        if lead_id:
+            # Сохраняем ID сделки в локальной базе
+            orders[user_id]['amocrm_lead_id'] = lead_id
+            logging.info(f"Успешно создан заказ в amoCRM: сделка {lead_id}, контакт {contact_id}")
+        else:
+            logging.error(f"Не удалось создать сделку для пользователя {user_id}")
+            
+    except Exception as e:
+        logging.error(f"Ошибка при создании заказа в amoCRM: {e}")
+        raise
 
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-1. Вы оформляете заказ в боте, указывая тариф, адрес, время, дату и телефон.
-2. Курьер бесплатно забирает вещи по указанному адресу в назначенное время.
-3. Наша команда гладит (и стирает при выборе тарифа) вещи с гарантией качества.
-4. В течение 24 часов (обычно на следующий день) курьер доставляет вещи обратно.
-5. Вы оплачиваете услугу курьеру и можете оставить отзыв."""
+1. Убрать стартовую картинку (что умеет бот на главный экран вставить видео, которое я тебе скинул, убери водяной знак и добавить надпись погладь).
+2. На главной экран вставь видео, которое я тебе скинул (убери водяной знак и добавь надпись 'Погладь').
+3. Исправить косяк со временем.
+4. Где этапы добавить картину успешных работ отзывы, выдая по 3 офера в конце призыв к действию сделать заказ.
+5. Пока можешь направить вопрос основателю проекта кнопка написать."""
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
@@ -327,27 +573,79 @@ async def handle_about_us(message: types.Message):
         [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
     ])
     
+    # Отправка фото с подписью и клавиатурой в одном сообщении
     await message.answer_photo(
         photo='AgACAgIAAxkBAAIED2jdZ-20723XKulmd-KCeY9ebsV3AALr_jEbkOvpSg1Zsk6-nJcNAQADAgADeQADNgQ',
         caption=text,
         reply_markup=keyboard
     )
-
 # Техподдержка
 async def handle_support(message: types.Message):
-    text = "Пока можете направить вопрос основателю проекта"
+    text = "Пока можешь направить вопрос основателю проекта"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Написать основателю", url="https://t.me/OlegMahalov")],
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий
+# Хэндлер для обработки фотографий и видео
 @dp.message()
-async def handle_photo(message: types.Message):
+async def handle_photo_or_video(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
+        logging.info(f"Получен file_id: {file_id}")
+    if message.video:
+        video = message.video
+        file_id = video.file_id
+        await message.answer(f"Получен video file_id: {file_id}")
+        logging.info(f"Получен video file_id: {file_id}")
+
+# Проверка примечаний от менеджеров в amoCRM
+async def check_amocrm_notes():
+    while True:
+        try:
+            # Получаем timestamp последней проверки
+            last_check = amocrm_client.tokens.get('last_check_timestamp')
+            current_time = int(datetime.now().timestamp())
+            
+            # Если это первая проверка, берем последние 5 минут
+            if not last_check:
+                last_check = current_time - 300
+            
+            # Проверяем все активные заказы
+            for user_id, order_data in orders.items():
+                lead_id = order_data.get('amocrm_lead_id')
+                if not lead_id:
+                    continue
+                
+                # Получаем новые примечания
+                notes = await amocrm_client.get_lead_notes(lead_id, last_check)
+                
+                for note in notes:
+                    # Проверяем, что это текстовое примечание от менеджера
+                    if note.get('note_type') == 'common' and note.get('text'):
+                        note_text = note.get('text', '')
+                        # Исключаем системные сообщения и сообщения от бота
+                        if not any(keyword in note_text.lower() for keyword in ['telegram id:', 'заказ создан', 'система']):
+                            try:
+                                await bot.send_message(
+                                    user_id, 
+                                    f"💬 Сообщение от менеджера:\n\n{note_text}"
+                                )
+                                logging.info(f"Отправлено сообщение от менеджера пользователю {user_id}: {note_text[:50]}...")
+                            except Exception as e:
+                                logging.error(f"Ошибка отправки сообщения пользователю {user_id}: {e}")
+            
+            # Обновляем timestamp последней проверки
+            amocrm_client.tokens['last_check_timestamp'] = current_time
+            amocrm_client.save_tokens()
+            
+        except Exception as e:
+            logging.error(f"Ошибка при проверке примечаний amoCRM: {e}")
+        
+        # Ждем 60 секунд перед следующей проверкой
+        await asyncio.sleep(60)
 
 # Автосообщения
 async def check_inactive_users():
@@ -363,24 +661,39 @@ async def check_inactive_users():
 # Запуск
 async def main():
     try:
+        # Инициализация amoCRM
+        logging.info("Инициализация amoCRM...")
+        await amocrm_client.get_account_info()
+        await amocrm_client.get_pipeline_stages(amocrm_client.tokens['pipeline_id'])
+        logging.info("AmoCRM инициализирован успешно")
+        
+        # Запуск фоновых задач
         inactive_task = asyncio.create_task(check_inactive_users())
+        amocrm_task = asyncio.create_task(check_amocrm_notes())
+        
         await dp.start_polling(bot)
     except (asyncio.CancelledError, KeyboardInterrupt):
         logging.info("Получен запрос на остановку бота. Выполняется graceful shutdown...")
         await asyncio.sleep(5)
         await bot.close()
-        if not inactive_task.done():
-            inactive_task.cancel()
-            try:
-                await inactive_task
-            except asyncio.CancelledError:
-                logging.info("Фоновое задание check_inactive_users успешно остановлено.")
+        await amocrm_client.close_session()
+        
+        # Останавливаем фоновые задачи
+        tasks_to_cancel = [inactive_task, amocrm_task]
+        for task in tasks_to_cancel:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    logging.info(f"Фоновое задание {task.get_name()} успешно остановлено.")
     except Exception as e:
         logging.error(f"Ошибка при запуске поллинга: {e}")
         raise SystemExit("Не удалось запустить бота. Проверьте токен и соединение.")
     finally:
         await asyncio.sleep(5)
         await bot.close()
+        await amocrm_client.close_session()
         logging.info("Бот остановлен.")
 
 if __name__ == '__main__':
