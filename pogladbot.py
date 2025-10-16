@@ -1,5 +1,6 @@
 import asyncio
 import platform
+import requests
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -17,7 +18,21 @@ if platform.system() == "Windows":
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = '8431173012:AAE-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
+TOKEN = '8431173012:AAEк-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
+
+# Токены AmoCRM (вставлены из amocrm_tokens.json)
+AMOCRM_TOKENS = {
+    "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImIzNTQ1MDkxNGZkYTkzMTA3NThmZDNjNzU5NTE3YTMzNjJhM2FjOTkxYTc4NjE3ODAyNmM1ZDk3YjUzM2I0MGUzN2Y0MGQyNWJiMTc4OTg0In0.eyJhdWQiOiI4YzdjNzhkOS05YWI1LTQ4NjAtYTIyNi1jODY4OGYyNTVhMzgiLCJqdGkiOiJiMzU0NTA5MTRmZGE5MzEwNzU4ZmQzYzc1OTUxN2EzMzYyYTNhYzk5MWE3ODYxNzgwMjZjNWQ5N2I1MzNiNDBlMzdmNDBkMjViYjE3ODk4NCIsImlhdCI6MTc2MDYzNDkzNSwibmJmIjoxNzYwNjM0OTM1LCJleHAiOjE4NDA1NzkyMDAsInN1YiI6IjEyOTE0Njg2IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNjMyMDMwLCJiYXNlX2RvbWFpbiI6ImFtb2NybS5ydSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJwdXNoX25vdGlmaWNhdGlvbnMiLCJmaWxlcyIsIm5vdGlmaWNhdGlvbnMiXSwidXNlcl9mbGFncyI6MCwiaGFzaF91dWlkIjoiOWMxYTA5MDctOGFmYS00YTgyLTg0NzUtYzhlMjE1MjNiNjE2IiwiYXBpX2RvbWFpbiI6ImFwaS1iLmFtb2NybS5ydSJ9.RgBvamYffXi2rAQAR9mxuuRMhISfGsVNKLYekgI8ochnSKtBVUySwbwWUH5OLNNMNmuk9WmJaHYCoy5koN_WzWZTrsC-CkgJrD6VkocwyLj8D-kaO-r_bk8uOlS7GSVVsPrUumfWgXF_4SmNxnWRqe7ZwqPQz9W4OxL0z_K6aRvaXtSGIRZ6lLMt6RX156rmij-Lkk0YNbytr92kgWLWRbGpg6l9e50YaZAlEczOfWIqbu4mdMPiMeYuxfncPNt2t_six8HnjkaiHGfsOwXkaJXNW4-EEikhdWIRHMjBUzbBsAdnUc2Xz9vmMpC73sIGpVEOljNoNzLeO6mEmsZxew",
+    "integration_id": "8c7c78d9-9ab5-4860-a226-c8688f255a38",
+    "secret_key": "pxNPleWUHwWljqdRIPsa8xa77LKseLeIaIcjKW6U7HZn9k8M38cFbeAJON92A9rU",
+    "pipeline_id": "10143858",
+    "api_domain": "api-b.amocrm.ru",
+    "base_domain": "amocrm.ru",
+    "account_id": 32632030,
+    "subdomain": None,
+    "first_stage_id": None,
+    "last_check_timestamp": None
+}
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
@@ -63,22 +78,13 @@ async def start_handler(message: types.Message):
     user_id = message.from_user.id
     users[user_id] = {'last_activity': datetime.now(), 'promo': None, 'first_order': True}
     
-    welcome_text = """Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇
-
-Что умеет бот:
-* Экономит до 5 часов в неделю на глажке 💘
-* Курьер бесплатно забирает и доставляет вещи 🚚
-* Гладим аккуратно, с гарантией качества (повтор бесплатно или возврат)
-* Абонементы и акции для постоянных клиентов 🎁
-* Интеграция с AmoCRM для трекинга заказов 📊
-* 24 часа на обработку — быстро и надежно ⏱️"""
+    welcome_text = "Привет! Я ПогладьБот — экономлю ваше время и силы на глажке одежды. Заказать можно снизу 👇"
+    await message.answer_photo(photo='AgACAgIAAxkBAAIEA2jdZwx79gl9ltjC8vkuJ73wyYCtAALc_jEbkOvpSkLFxuDzEW-uAQADAgADeQADNgQ', caption=welcome_text)
     
-    # Отправка видео с подписью и клавиатурой
-    await message.answer_video(
-        video='BAACAgIAAxkBAAIFamjmseBYjm6p6XIhRzXJ_CoknhS4AAKwgwACNEo4S9T8BovJAUfONgQ',
-        caption=welcome_text,
-        reply_markup=get_start_menu()
-    )
+    value_text = "С нашим сервисом вы экономите до 5 часов в неделю и занимаетесь самым важным 💘. Больше не нужно ехать в прачечную, переплачивать или гладить самим — всё сделаем мы.\nНа первый заказ есть сюрприз 🤫🎁 Чтобы узнать что мы тебе подарили, жми 'Сделать заказ'"
+    await message.answer_video(video='YOUR_VIDEO_FILE_ID', caption=value_text)
+    
+    await message.answer(value_text, reply_markup=get_start_menu())
 
 # Callback handler
 @dp.callback_query()
@@ -258,11 +264,11 @@ async def handle_payment_method(callback: types.CallbackQuery, state: FSMContext
 # Этапы работы
 async def handle_work_stages(message: types.Message):
     text = """Процесс сотрудничества 🤝
-1. Убрать стартовую картинку (что умеет бот на главный экран вставить видео, которое я тебе скинул, убери водяной знак и добавить надпись погладь).
-2. На главной экран вставь видео, которое я тебе скинул (убери водяной знак и добавь надпись 'Погладь').
-3. Исправить косяк со временем.
-4. Где этапы добавить картину успешных работ отзывы, выдая по 3 офера в конце призыв к действию сделать заказ.
-5. Пока можешь направить вопрос основателю проекта кнопка написать."""
+1. Вы оформляете заказ в боте, указывая тариф, адрес, время, дату и телефон.
+2. Курьер бесплатно забирает вещи по указанному адресу в назначенное время.
+3. Наша команда гладит (и стирает при выборе тарифа) вещи с гарантией качества.
+4. В течение 24 часов (обычно на следующий день) курьер доставляет вещи обратно.
+5. Вы оплачиваете услугу курьеру и можете оставить отзыв."""
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="В главное меню", callback_data="start")],
@@ -321,33 +327,27 @@ async def handle_about_us(message: types.Message):
         [InlineKeyboardButton(text="Задать вопрос", callback_data="support")],
     ])
     
-    # Отправка фото с подписью и клавиатурой в одном сообщении
     await message.answer_photo(
         photo='AgACAgIAAxkBAAIED2jdZ-20723XKulmd-KCeY9ebsV3AALr_jEbkOvpSg1Zsk6-nJcNAQADAgADeQADNgQ',
         caption=text,
         reply_markup=keyboard
     )
+
 # Техподдержка
 async def handle_support(message: types.Message):
-    text = "Пока можешь направить вопрос основателю проекта"
+    text = "Пока можете направить вопрос основателю проекта"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Написать основателю", url="https://t.me/OlegMahalov")],
     ])
     await message.answer(text, reply_markup=keyboard)
 
-# Хэндлер для обработки фотографий и видео
+# Хэндлер для обработки фотографий
 @dp.message()
-async def handle_photo_or_video(message: types.Message):
+async def handle_photo(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file_id = photo.file_id
         await message.answer(f"Получен file_id: {file_id}")
-        logging.info(f"Получен file_id: {file_id}")
-    if message.video:
-        video = message.video
-        file_id = video.file_id
-        await message.answer(f"Получен video file_id: {file_id}")
-        logging.info(f"Получен video file_id: {file_id}")
 
 # Автосообщения
 async def check_inactive_users():
