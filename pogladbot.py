@@ -260,7 +260,18 @@ class OrderStates(StatesGroup):
 
 # Инициализация бота и диспетчера
 try:
+    # Проверяем токен на корректность
+    if not TOKEN or len(TOKEN) < 10 or ':' not in TOKEN:
+        raise ValueError("Некорректный формат токена")
+    
+    # Дополнительная проверка формата токена
+    parts = TOKEN.split(':')
+    if len(parts) != 2 or not parts[0].isdigit() or len(parts[1]) < 20:
+        raise ValueError("Некорректный формат токена")
+    
     bot = Bot(token=TOKEN)
+    logging.info(f"Токен бота: {TOKEN[:10]}...{TOKEN[-10:]}")
+    logging.info("Попытка подключения к Telegram API...")
 except Exception as e:
     logging.error(f"Ошибка инициализации бота: {e}")
     raise SystemExit("Проверьте токен бота и убедитесь, что он действителен.")
@@ -306,6 +317,15 @@ async def start_handler(message: types.Message):
         caption=welcome_text,
         reply_markup=get_start_menu()
     )
+
+# Тестовая команда для проверки токена бота
+@dp.message(Command('test_token'))
+async def test_token_handler(message: types.Message):
+    try:
+        me = await bot.get_me()
+        await message.answer(f"✅ Токен действителен!\nБот: @{me.username}\nИмя: {me.first_name}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка токена: {e}")
 
 # Тестовая команда для проверки интеграции с amoCRM
 @dp.message(Command('test_amocrm'))
@@ -712,9 +732,24 @@ async def check_inactive_users():
                 info['sent_3min'] = True
         await asyncio.sleep(60)
 
+# Функция для тестирования токена
+async def test_bot_token():
+    try:
+        logging.info("Тестирование токена бота...")
+        me = await bot.get_me()
+        logging.info(f"✅ Токен действителен! Бот: @{me.username} ({me.first_name})")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка токена: {e}")
+        return False
+
 # Запуск
 async def main():
     try:
+        # Тестируем токен бота
+        if not await test_bot_token():
+            raise SystemExit("Токен бота недействителен. Проверьте токен через @BotFather.")
+        
         # Инициализация amoCRM
         logging.info("Инициализация amoCRM...")
         amocrm_client.validate_tokens()
@@ -744,6 +779,9 @@ async def main():
                     logging.info(f"Фоновое задание {task.get_name()} успешно остановлено.")
     except Exception as e:
         logging.error(f"Ошибка при запуске поллинга: {e}")
+        if "Unauthorized" in str(e):
+            logging.error("Ошибка авторизации: токен недействителен или бот заблокирован")
+            logging.error("Проверьте токен через @BotFather в Telegram")
         raise SystemExit("Не удалось запустить бота. Проверьте токен и соединение.")
     finally:
         await asyncio.sleep(5)
