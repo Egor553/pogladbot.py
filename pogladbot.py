@@ -244,7 +244,7 @@ class AmoCRMClient:
 amocrm_client = AmoCRMClient()
 
 # Токен бота
-TOKEN = '8431173012:AAE-1WU5HEw2do0H2zdd8s_pGJFAqMKDehU'
+TOKEN = '8431173012:AAGrrww8iKW1nNkdCc7b5QUKoaPZxaG-qDg'
 
 # Определение состояний FSM
 class OrderStates(StatesGroup):
